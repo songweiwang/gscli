@@ -1,0 +1,4 @@
+#!/bin/bash
+
+echo "Removing symlink to gscli"
+rm /usr/local/bin/gscli
