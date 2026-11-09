@@ -135,6 +135,30 @@ mydb       | PostgreSQL (pg)
 | `\?` | 显示所有命令帮助 |
 | `\#` | 刷新自动补全 |
 
+**命名查询（把常用 SQL 存下来反复用）：**
+
+| 命令 | 说明 |
+|------|------|
+| `\n` | 列出所有命名查询 |
+| `\n+` | 列出并显示各自的 SQL |
+| `\n 名字 [参数...]` | 执行一条命名查询（支持 `$1`、`$2`…、`$*`、`$@` 占位符） |
+| `\n+ 名字` | 只显示这条的 SQL，不执行 |
+| `\np 模式` | 按正则打印匹配的命名查询 |
+| `\ns 名字 SQL` | 保存一条命名查询 |
+| `\nd 名字` | 删除命名查询（可一次给多个名字） |
+
+存在 `~/.config/gscli/config` 的 `[named queries]` 段里，跨会话保留。示例：
+
+```bash
+\ns slow_query SELECT pid, query, now()-query_start AS dur FROM pg_stat_activity WHERE state='active';
+\n+                                  # 看都存了哪些
+\n slow_query                        # 跑它
+\ns by_oid SELECT * FROM tbl WHERE oid = $1::oid;
+\n by_oid 16384                      # 占位符用参数替换
+\np slow                             # 只看 SQL
+\nd slow_query                       # 删掉
+```
+
 **GaussDB 专属命令：**
 
 | 命令 | 说明 |

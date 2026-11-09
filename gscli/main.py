@@ -10,6 +10,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="psycopg2")
 import atexit
 import os
 import re
+import shlex
 import sys
 import traceback
 import logging
@@ -51,7 +52,8 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from pygments.lexers.sql import PostgresLexer
 
-from .gsspecial import GSSpecial, NO_QUERY
+from .gsspecial import GSSpecial, NO_QUERY, QUERY
+from .namedqueries import NamedQueries, subst_args
 
 # Pager constants
 PAGER_OFF = 'off'
@@ -200,7 +202,7 @@ class GSCli:
         self.config_writer = load_config(get_config_filename(gslirc_file))
 
         # make sure to use self.config_writer, not self.config
-        # NamedQueries removed for gscli
+        NamedQueries.instance = NamedQueries.from_config(self.config_writer)
 
         self.logger = logging.getLogger(__name__)
         self.initialize_logging()
@@ -370,6 +372,36 @@ class GSCli:
         self.gsspecial.register(
             self.info_connection, "\\conninfo", "\\conninfo", "Get connection details"
         )
+        # 命名查询（\n 系列）
+        self.gsspecial.register(
+            self.named_query,
+            "\\n",
+            "\\n[+] [name [args...]]",
+            "List, print or execute a named query.",
+            arg_type=QUERY,
+            aliases=("\\n+",),
+        )
+        self.gsspecial.register(
+            self.named_query_print,
+            "\\np",
+            "\\np pattern",
+            "Print a named query.",
+            arg_type=NO_QUERY,
+        )
+        self.gsspecial.register(
+            self.named_query_save,
+            "\\ns",
+            "\\ns name query",
+            "Save a named query.",
+            arg_type=NO_QUERY,
+        )
+        self.gsspecial.register(
+            self.named_query_delete,
+            "\\nd",
+            "\\nd name",
+            "Delete a named query.",
+            arg_type=NO_QUERY,
+        )
         self.gsspecial.register(
             self.change_table_format,
             "\\T",
@@ -421,6 +453,99 @@ class GSCli:
             lines.append(f"  {cmd.syntax:<40s} {cmd.description}")
         lines.append("")
         yield (None, None, None, "\n".join(lines))
+
+    # ---- 命名查询（\n 系列） ----
+
+    def _named_query_list(self, verbose=False):
+        """列出全部命名查询；verbose 时带 SQL 定义。"""
+        nq = NamedQueries.instance
+        names = nq.list()
+        if not names:
+            yield (None, None, None, NamedQueries.usage)
+            return
+        if verbose:
+            width = max(len(n) for n in names)
+            lines = ["%-*s  %s" % (width, n, nq.get(n)) for n in names]
+        else:
+            lines = list(names)
+        yield (None, None, None, "\n".join(lines))
+
+    def named_query(self, pattern="", verbose=False, **_):
+        """\\n：无参列出；带名字执行；\\n+ 列出定义 / 打印定义。"""
+        pattern = (pattern or "").strip()
+        if not pattern:
+            yield from self._named_query_list(verbose)
+            return
+
+        params = shlex.split(pattern)
+        name = params.pop(0) if params else ""
+        if not name:
+            yield from self._named_query_list(verbose)
+            return
+
+        query = NamedQueries.instance.get(name)
+        if query is None:
+            yield (None, None, None, "No named query: %s" % name)
+            return
+
+        sql, leftovers = subst_args(query, params)
+        if leftovers:
+            yield (
+                None,
+                None,
+                None,
+                "Too many arguments for '%s': %s" % (name, " ".join(leftovers)),
+            )
+            return
+        if verbose:
+            # \n+ 名字：只看不跑
+            yield (None, None, None, "> %s" % sql)
+            return
+        # 交给执行器去跑（第 5 项是 SQL，后两项 success/is_special）
+        yield (None, None, None, None, sql, True, True)
+
+    def named_query_print(self, pattern="", **_):
+        """\\np：按正则打印命名查询。"""
+        pattern = (pattern or "").strip()
+        if not pattern:
+            yield (None, None, None, "Syntax: \\np pattern.\n\n" + NamedQueries.usage)
+            return
+        rows = NamedQueries.instance.match(pattern)
+        if not rows:
+            yield (None, None, None, "No match found")
+            return
+        width = max(len(n) for n, _ in rows)
+        yield (
+            None,
+            None,
+            None,
+            "\n".join("%-*s  %s" % (width, n, q) for n, q in rows),
+        )
+
+    def named_query_save(self, pattern="", **_):
+        """\\ns 名字 SQL：保存。"""
+        pattern = (pattern or "").strip()
+        name, _, query = pattern.partition(" ")
+        name, query = name.strip(), query.strip()
+        if not name or not query:
+            yield (None, None, None, "Syntax: \\ns name query.\n\n" + NamedQueries.usage)
+            return
+        NamedQueries.instance.save(name, query)
+        yield (None, None, None, "%s: Saved." % name)
+
+    def named_query_delete(self, pattern="", **_):
+        """\\nd 名字：删除。"""
+        names = shlex.split((pattern or "").strip())
+        if not names:
+            yield (None, None, None, "Syntax: \\nd name.\n\n" + NamedQueries.usage)
+            return
+        out = []
+        for name in names:
+            if NamedQueries.instance.delete(name):
+                out.append("%s: Deleted" % name)
+            else:
+                out.append("%s: Not Found." % name)
+        yield (None, None, None, "\n".join(out))
 
     def change_table_format(self, pattern, **_):
         try:

@@ -4,7 +4,7 @@ from itertools import count, repeat, chain
 import operator
 from collections import namedtuple, defaultdict, OrderedDict
 from cli_helpers.tabular_output import TabularOutputFormatter
-# NamedQueries removed for gscli
+from .namedqueries import NamedQueries
 from prompt_toolkit.completion import Completer, Completion, PathCompleter
 from prompt_toolkit.document import Document
 from .packages.sqlcompletion import (
@@ -927,6 +927,8 @@ class GSCompleter(Completer):
         return matches
 
     def get_namedquery_matches(self, _, word_before_cursor):
+        if NamedQueries.instance is None:
+            return []
         return self.find_matches(
             word_before_cursor, NamedQueries.instance.list(), meta="named query"
         )
